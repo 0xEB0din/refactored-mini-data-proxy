@@ -1,6 +1,6 @@
+# Core — proxy re-encryption
 umbral==0.3.0
-web3==5.17.0
-eth-account==0.12.2
-eth-keys==0.3.3
+
+# Dev / QA
 pylint==2.16.3
 pytest==6.2.5

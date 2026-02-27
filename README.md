@@ -1,156 +1,252 @@
-# Mini Data Proxy Provider - Refactored
+# Mini Data Proxy
 
-This project aims to refactor a mini data proxy provider server that enables secure data sharing among three actors: Alice (owner), Bob (consumer), and a relayer (proxy server). The primary objective is to utilize proxy re-encryption to securely transfer encrypted messages from Alice to Bob via the relayer.
+A compact reference implementation of **Proxy Re-Encryption (PRE)** for secure, multi-party data sharing — built on [PyUmbral](https://github.com/nucypher/pyUmbral/) (NuCypher / Threshold Network).
 
-## Table of Contents
-- [Project Overview](#project-overview)
-- [Project Structure](#project-structure)
-- [Current Analysis](#current-analysis)
-  - [Gaps](#gaps)
-  - [Trade-offs](#trade-offs)
-  - [Limitations](#limitations)
-- [Implementation Plan](#implementation-plan)
-  - [Phase 1: Refactoring and Code Quality](#phase-1-refactoring-and-code-quality)
-  - [Phase 2: Proxy Re-encryption Integration](#phase-2-proxy-re-encryption-integration)
-  - [Phase 3: Testing and Validation](#phase-3-testing-and-validation)
-  - [Phase 4: Documentation](#documentation)
-- [Setup and Usage](#setup-and-usage)
-- [How It Works](#how-it-works)
-- [Best Practices Followed](#best-practices-followed)
-- [Future Enhancements](#future-enhancements)
-- [License](#license)
+The system allows a data owner (*Alice*) to share encrypted data with a consumer (*Bob*) through a proxy (*Relayer*) — without the proxy ever seeing the plaintext and without Alice being online at the time of access.
 
-## Project Overview
+---
 
-The Mini Data Proxy Provider project focuses on providing a secure and efficient solution for data sharing using proxy re-encryption. The provided script serves as a starting point, and the goal is to refactor and enhance it to meet the project requirements while adhering to best practices regarding code quality, security, and performance.
+## Why This Exists
+
+Most "secure sharing" demos stop at symmetric encryption with a shared key, which sidesteps the actual hard problems: key distribution, delegation, and revocation. PRE solves these at the cryptographic layer:
+
+- **Alice** encrypts once with her own key — no need to know Bob up front.
+- **Re-encryption keys (kfrags)** let the proxy transform ciphertexts for Bob without learning anything about the plaintext or Alice's secret key.
+- **Threshold scheme** (`t-of-n`) means no single proxy can act alone, limiting the blast radius of a compromised node.
+
+This project implements the full cycle: key generation, encryption, kfrag creation, proxy re-encryption, and decryption — wired together with W3C DID documents for metadata, structured logging, and a CLI entry point.
+
+---
+
+## Architecture
+
+```
+┌───────────┐         kfrags          ┌───────────┐
+│           │ ───────────────────────▶ │           │
+│   Alice   │                         │  Relayer  │
+│  (owner)  │    ciphertext + DID     │  (proxy)  │
+│           │ ───────────────────────▶ │           │
+└───────────┘                         └─────┬─────┘
+                                            │
+                                 re-encrypt │ (using kfrags)
+                                            │
+                                      ┌─────▼─────┐
+                                      │           │
+                                      │    Bob    │
+                                      │ (consumer)│
+                                      │           │
+                                      └───────────┘
+                                  decrypts with own sk
+```
+
+**Data flow:**
+
+1. Alice generates a keypair and encrypts her data → `(ciphertext, capsule)`.
+2. Alice creates *n* key fragments (kfrags) for Bob using a threshold `t-of-n` scheme and signs them.
+3. Ciphertext, capsule, and kfrags are stored alongside a DID document that records access metadata.
+4. When Bob requests data, the Relayer re-encrypts the capsule using `t` verified kfrags → producing capsule fragments (cfrags).
+5. Bob combines `t` cfrags with his secret key to decrypt the original plaintext.
+
+At no point does the Relayer, or any individual kfrag holder, gain access to the plaintext.
+
+---
 
 ## Project Structure
-- `src/`: Contains the source code files.
-  - `encryption.py`: Handles encryption and decryption functionality.
-  - `did_document.py`: Manages DID document creation and handling.
-  - `database.py`: Provides database storage and retrieval functionality.
-  - `token_validation.py`: Validates token burn for data access.
-- `tests/`: Contains the test files for each module.
-  - `test_main.py`: Tests for the main module.
-  - `test_encryption.py`: Tests for the encryption module.
-  - `test_did_document.py`: Tests for the DID document module.
-  - `test_database.py`: Tests for the database module.
-- `main.py`: The main script to run the mini data proxy provider server.
-- `requirements.txt`: Lists the required dependencies.
 
+```
+.
+├── main.py                  # CLI entry point (argparse)
+├── src/
+│   ├── config.py            # Env-driven configuration
+│   ├── logger.py            # Structured logging setup
+│   ├── encryption.py        # PRE primitives (encrypt, kfrags, re-encrypt, decrypt)
+│   ├── database.py          # In-memory store + DID-based retrieval
+│   ├── did_document.py      # W3C DID document builder
+│   └── token_validation.py  # Token-burn gate (stub)
+├── tests/
+│   ├── test_main.py         # End-to-end CLI tests
+│   ├── test_encryption.py   # Unit tests — encryption module
+│   ├── test_database.py     # Unit tests — store / consume
+│   └── test_did_document.py # Unit tests — DID documents
+├── requirements.txt         # Core + dev dependencies
+├── requirements-web3.txt    # Optional Web3 dependencies (roadmap)
+├── Makefile                 # Common tasks (install, lint, test, audit)
+├── SECURITY.md              # Vulnerability reporting policy
+├── .editorconfig            # Editor-agnostic formatting rules
+├── .pylintrc                # Pylint configuration
+└── .github/
+    └── workflows/
+        └── ci.yml           # Lint → Test matrix → Dependency audit
+```
 
+---
 
-## Current Analysis (Before Refactoring)
-
-### Gaps
-- The current script needs proper modularization and separation of concerns, making it difficult to maintain and extend.
-- The code does not follow consistent naming conventions and lacks meaningful comments, hindering readability and comprehension.
-- The script does not include comprehensive error handling and input validation, which could lead to potential vulnerabilities and unexpected behaviour.
-- The dependency versions are not pinned in the `requirements.txt` file, which may result in inconsistent behaviour across different environments.
-- No linting configuration is set up to enforce code quality and adherence to coding standards.
-
-### Trade-offs
-- The choice of the `ecies` library for encryption and decryption provides simplicity but may have limitations in terms of performance and security compared to other well-established libraries, such as [PyNaCl](https://pynacl.readthedocs.io/en/stable/) or [PyCryptodome](https://pycryptodome.readthedocs.io/en/latest/).
-- The current implementation does not utilize proxy re-encryption, which could introduce additional complexity but offers enhanced security and privacy features for data sharing.
-
-### Limitations
-- Secure key management and storage mechanisms are not implemented, which could pose security risks when handling encryption keys.
-- Performance metrics are not defined, which could impact the scalability and efficiency of the data-sharing process.
-- The need for a logging mechanism makes tracking and debugging issues during the data-sharing process challenging.
-- The test coverage is limited, which may result in undetected bugs and issues in the codebase.
-
-## Implementation Plan
-
-### Phase 1: Refactoring and Code Quality
-- [x] Modularize codebase for better organization and maintainability
-- [x] Enhance code readability with meaningful comments, consistent naming, and type hints
-- [x] Implement robust error handling and input validation for stability and security
-  - Custom exception classes (e.g., `DataStorageError`) for specific error handling
-  - Input validation checks (e.g., for missing parameters, invalid data formats)
-- [x] Update `requirements.txt` file with exact versions to ensure consistent and secure dependencies
-- [x] Setup Pylint configuration to enforce code quality and adherence to coding standards
-- [x] Create a CI workflow file to facilitate the deployment when needed
-
-### Phase 2: Proxy Re-encryption Integration
-- [x] Research and select a suitable proxy re-encryption library based on security, performance, and compatibility
-  - PyUmbral was selected for its strong security, high performance, and seamless integration capabilities
-- [x] Integrate PyUmbral into the existing codebase for proxy re-encryption functionalities and cryptographic operations
-
-### Phase 3: Testing and Validation
-- [x] Develop comprehensive test cases for proxy re-encryption functionality
-- [x] Conduct thorough testing to ensure data integrity and confidentiality
-- [x] Validate the integration of dependencies and their proper utilization
-
-### Phase 4: Documentation
-- [x] Update README with detailed setup instructions, usage guidelines, and testing procedures
-- [x] Include project overview, implementation details, and future enhancements
-- [x] Document the proxy re-encryption process and its benefits for secure data sharing
-
-## Setup, Usage and Testing
+## Getting Started
 
 ### Prerequisites
-- Python 3.7 or higher
-- pip package manager
 
-### Setup Instructions
-1. Clone the repository:
-`git clone https://github.com/0xEB0din/refactored-mini-data-proxy.git`
-2. Navigate to the project directory:
-`cd refactored-mini-data-proxy`
-3. (Optional) Create a virtual environment to isolate project dependencies:
-`python -m venv venv`
-4. (Optional) Activate the virtual environment:
-  - For macOS and Linux: `source venv/bin/activate`
-  - For Windows: `venv\Scripts\activate`
-5. Install the required dependencies:
-`pip install -r requirements.txt`
+- Python 3.9+
+- pip
 
-### Usage Instructions
-1. Ensure you are in the project directory and the virtual environment is activated (if using one).
-2. Run the mini data proxy provider server: `python main.py`
-3. The server will start running, and you will see an output similar to the following:
-```
-  Decrypted Data (bytes): b'Sample data'
-  Access Link: https://example.com/data
+### Install & Run
+
+```bash
+git clone https://github.com/0xEB0din/refactored-mini-data-proxy.git
+cd refactored-mini-data-proxy
+
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+# Run the full encrypt → store → consume round-trip
+python main.py demo
 ```
 
-### Testing Instructions
-1. Ensure you are in the project directory and the virtual environment is activated (if using one).
-2. Run the test suite:`pytest tests` or `python -m unittest discover tests`
-3. The test suite will execute, and you will see the test results in the console. Any failures or errors will be reported, along with their details.
+Or use the `Makefile`:
 
-## How It Works
-The project utilizes **Proxy Re-Encryption (PRE)** with the [pyUmbral](https://github.com/nucypher/pyUmbral/ "pyUmbral") to facilitate secure, scalable data sharing:
-- **Encryption**: Utilizes Alice's public key for data encryption and generates re-encryption keys that allow proxy data transformation for Bob, without revealing its contents.
-- **Proxy Re-Encryption**: Manages data transformation at the proxy server and ensures the secure storage and retrieval of encrypted and transformed data.
-- **Decryption**: Enables Bob to securely access the re-encrypted data using his private key, ensuring data is only accessible to authorized parties.
-> Scenario: Alice encrypts data using her public key and generates re-encryption keys for Bob. The proxy server transforms the encrypted data for Bob using the re-encryption keys, ensuring secure data sharing without revealing the original content. Bob can then decrypt the transformed data using his private key, maintaining data confidentiality and integrity.
-This streamlined approach enhances data security and efficiency, demonstrating advanced cryptographic implementation in a multi-user environment.
+```bash
+make install
+make demo
+```
 
-## Best Practices Followed
-- **Modularization**: The codebase is structured into separate modules for better organization and maintainability.
-- **Error Handling**: Custom exception classes and input validation checks are implemented to ensure stability and security.
-- **Security**: Utilized PyUmbral for strong security and high performance in proxy re-encryption operations.
-- **Documentation**: Meaningful comments and docstrings are included to enhance code readability and comprehension.
-- **Dependency Management**: The `requirements.txt` file lists exact versions to ensure consistent and secure dependencies.
-- **Code Quality**: Pylint configuration is set up to enforce code quality and adherence to coding standards.
-- **Testing**: Comprehensive test cases are developed to validate the functionality and ensure data integrity and confidentiality.
-- **Convention**: Followed PEP8 coding standards and type hints for better code readability and maintainability.
-- **Commit Messages**: Followed the [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) for better commit message clarity and consistency.
-- **CI/CD**: A CI workflow file is created to facilitate deployment and integration with continuous integration tools.
+### CLI Options
 
+```
+python main.py demo --help
 
-## Future Enhancements
-- [ ] SonarQube integration
-- [ ] Security Scanning
-- [ ] Increase test coverage
-- [ ] Defining performance metrics
-- [ ] Introducing a logging mechanism 
-- [ ] Implement secure key management and storage mechanisms
+  --data          Plaintext payload (default: "Sample data")
+  --asset-id      Unique data-asset identifier (default: asset-001)
+  --access-url    URL stored in the DID document
+  --threshold     Minimum kfrags for decryption (default: 2)
+  --shares        Total kfrags to generate (default: 3)
+```
 
-Feel free to hit me up on [github](https://github.com/0xEB0din) or [email](mailto:edge@roguebit.me) if you have any questions. Cheers!
+### Run Tests
 
+```bash
+make test          # or: python -m pytest tests/ -v
+make lint          # or: pylint src/
+make audit         # pip-audit against known CVEs
+```
+
+---
+
+## Configuration
+
+All tuneable parameters are centralized in `src/config.py` and can be overridden with environment variables:
+
+| Variable                 | Default  | Description                              |
+|--------------------------|----------|------------------------------------------|
+| `PRE_THRESHOLD`          | `2`      | Minimum kfrags needed for decryption     |
+| `PRE_SHARES`             | `3`      | Total kfrags generated per delegation    |
+| `TOKEN_BURN_REQUIRED`    | `false`  | Enable token-gated access (stub)         |
+| `TOKEN_CONTRACT_ADDRESS` | `""`     | Smart contract address for token burns   |
+| `LOG_LEVEL`              | `INFO`   | Python log level (DEBUG, INFO, WARNING)  |
+
+---
+
+## How Proxy Re-Encryption Works
+
+PRE is a public-key cryptosystem that lets a semi-trusted proxy convert a ciphertext encrypted for Alice into one decryptable by Bob — without the proxy ever accessing the plaintext.
+
+### Cryptographic Properties
+
+| Property                  | Guarantee                                                                 |
+|---------------------------|---------------------------------------------------------------------------|
+| **Unidirectional**        | Re-encryption keys work in one direction only (Alice → Bob)               |
+| **Non-interactive**       | Alice can delegate without Bob being online                               |
+| **Non-transitive**        | Bob cannot re-delegate to a third party without Alice's involvement       |
+| **Threshold**             | Requires `t-of-n` kfrags — no single proxy holds full re-encryption power|
+| **CPA-secure**            | Based on the Decisional Diffie-Hellman assumption                         |
+
+### Library Choice: PyUmbral
+
+[PyUmbral](https://github.com/nucypher/pyUmbral/) (NuCypher) was chosen for:
+
+- **Threshold splitting** — configurable `t-of-n` for distributed trust.
+- **Signed fragments** — kfrags are signed by the delegator, preventing substitution attacks.
+- **Battle-tested** — powers the Threshold Network and has been audited.
+- **Clean API** — direct mapping between crypto concepts and code.
+
+---
+
+## CI / CD
+
+The GitHub Actions pipeline (`.github/workflows/ci.yml`) runs three parallel jobs:
+
+| Job       | What it does                                        |
+|-----------|-----------------------------------------------------|
+| **Lint**  | `pylint src/` against the project's `.pylintrc`     |
+| **Test**  | `pytest tests/ -v` across Python 3.9, 3.10, 3.11   |
+| **Audit** | `pip-audit` to flag known vulnerabilities in deps   |
+
+---
+
+## Known Limitations & Architectural Gaps
+
+These are deliberate scope boundaries for a reference implementation — not oversights. Each one is a potential work item if this evolves toward production use.
+
+### Security Gaps
+
+| Gap | Risk | Mitigation Path |
+|-----|------|-----------------|
+| **In-memory key material** | Keys exist only in process memory, no persistence or protection | Integrate HSM / KMS (e.g., AWS KMS, HashiCorp Vault) for key wrapping |
+| **No key rotation** | Compromised keys cannot be rotated without re-encrypting all data | Implement key versioning with automated re-encryption pipeline |
+| **No key revocation** | Once kfrags are issued, delegation cannot be revoked | Add kfrag expiry timestamps and a revocation list checked at re-encryption time |
+| **Token validation is stubbed** | `validate_token_burn()` always returns `True` | Wire up Web3 contract call to verify on-chain token burns before releasing data |
+| **No TLS / mTLS** | Data in transit is not protected at the transport layer | This is an application-layer demo; wrap with HTTPS in production |
+
+### Architectural Tradeoffs
+
+| Tradeoff | Current Choice | Alternative |
+|----------|----------------|-------------|
+| **Storage** | In-memory Python dict | Persistent encrypted store (SQLCipher, Redis with encryption-at-rest) |
+| **DID method** | Custom `did:op:` | Use an established DID method (did:web, did:key, did:ethr) for interoperability |
+| **Threshold params** | Fixed at config time | Dynamic per-delegation policies via an access-control layer |
+| **Proxy model** | Single-process, no network | Separate proxy service with REST/gRPC API |
+| **Error propagation** | Custom exceptions | Structured error codes (JSON-based) for API consumers |
+
+### Performance Considerations
+
+- Threshold kfrag generation is O(n) — fine for small `n`, revisit for large-scale delegation graphs.
+- Re-encryption is CPU-bound — a production proxy would benefit from async workers or a Rust FFI path.
+- No caching of verified kfrags; repeated access re-verifies signatures each time.
+
+---
+
+## Roadmap
+
+Planned improvements, roughly ordered by priority:
+
+- [ ] **REST API layer** — FastAPI-based proxy service with OpenAPI docs
+- [ ] **Token-gated access** — Web3 smart contract integration for data monetization
+- [ ] **Structured audit logging** — Append-only log with tamper detection (hash chains)
+- [ ] **Key lifecycle management** — HSM-backed key storage, rotation, and revocation
+- [ ] **Access control policies** — ABAC/RBAC rules per data asset
+- [ ] **Persistent storage backend** — Pluggable adapter (SQLCipher, IPFS, S3 with SSE)
+- [ ] **Multi-party threshold proxy** — Distribute kfrags across independent proxy nodes
+- [ ] **Merkle-based data integrity** — Content-addressed storage with verifiable proofs
+- [ ] **Performance benchmarks** — Latency and throughput baselines for key operations
+- [ ] **SonarQube / SAST integration** — Automated static analysis in CI
+- [ ] **Increase test coverage** — Edge cases, negative paths, fuzzing
+
+---
+
+## Contributing
+
+1. Fork the repo.
+2. Create a feature branch (`git checkout -b feat/your-feature`).
+3. Write tests for new functionality.
+4. Ensure `make lint` and `make test` pass.
+5. Open a PR with a clear description.
+
+See [SECURITY.md](SECURITY.md) for vulnerability reporting.
+
+---
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+[MIT](LICENSE)
+
+---
+
+Questions or feedback? Reach me on [GitHub](https://github.com/0xEB0din) or via [email](mailto:edge@roguebit.me).
