@@ -1,18 +1,26 @@
-def validate_token_burn(consumer_address: str, token_amount: int) -> bool:
-    """
-    Validate token burn for access.
+"""
+Token-burn validation stub.
 
-    This function is a placeholder for actual token validation logic.
-    In a real-world scenario, it would interact with a token system or smart contract
-    to verify if the consumer has burned the required amount of tokens.
+In production this would call a smart contract to verify
+that the consumer has burned the required number of access
+tokens before data is released.
+"""
+
+
+# pylint: disable=unused-argument
+def validate_token_burn(
+    consumer_address: str,
+    token_amount: int
+) -> bool:
+    """
+    Validate that the consumer burned enough tokens.
 
     Args:
-        consumer_address (str): Address of the consumer performing token burn.
-        token_amount (int): Amount of tokens burned.
+        consumer_address: On-chain address of the consumer.
+        token_amount: Number of tokens expected to be burned.
 
     Returns:
-        bool: True if token burn is valid, False otherwise.
+        True if the burn is valid, False otherwise.
     """
-    # TODO: Implement the actual token burn validation logic
-    # This is a placeholder implementation that always returns True
+    # TODO: wire up Web3 contract call  # noqa: T101
     return True

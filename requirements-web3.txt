@@ -1,0 +1,8 @@
+# Optional — install these when working on token-gated access (roadmap).
+# Kept separate because web3 pulls in a large dependency tree and
+# is not required for the core PRE functionality.
+#
+# Usage:  pip install -r requirements-web3.txt
+web3>=6.0,<7.0
+eth-account>=0.10,<1.0
+eth-keys>=0.5,<1.0

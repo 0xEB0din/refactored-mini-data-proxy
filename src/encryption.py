@@ -1,23 +1,30 @@
 from typing import List, Tuple
 from umbral import (
     SecretKey, PublicKey, Signer, Capsule,
-    encrypt, decrypt_original, generate_kfrags, reencrypt, decrypt_reencrypted,
+    encrypt, decrypt_original, generate_kfrags,
+    reencrypt, decrypt_reencrypted,
     VerifiedKeyFrag, KeyFrag, VerifiedCapsuleFrag
 )
+from .logger import get_logger
+
+log = get_logger(__name__)
 
 
-def encrypt_data(data: bytes, public_key: PublicKey) -> Tuple[bytes, Capsule]:
+def encrypt_data(
+    data: bytes, public_key: PublicKey
+) -> Tuple[bytes, Capsule]:
     """
     Encrypts the given data using the provided public key.
 
     Args:
-        data (bytes): Data to be encrypted.
-        public_key (PublicKey): Public key used for encryption.
+        data: Raw bytes to be encrypted.
+        public_key: Public key used for encryption.
 
     Returns:
-        Tuple[bytes, Capsule]: A tuple containing the ciphertext and the capsule.
+        Tuple of (ciphertext, capsule).
     """
     capsule, ciphertext = encrypt(public_key, data)
+    log.debug("Encrypted %d bytes of data", len(data))
     return ciphertext, capsule
 
 
@@ -27,21 +34,21 @@ def create_kfrags(
     signer: Signer,
     threshold: int,
     shares: int
-) -> list[VerifiedKeyFrag]:
+) -> List[VerifiedKeyFrag]:
     """
     Generates key fragments (kfrags) for proxy re-encryption.
 
     Args:
-        delegating_sk (SecretKey): Secret key of the delegating party.
-        receiving_pk (PublicKey): Public key of the receiving party.
-        signer (Signer): Signer for the delegating party.
-        threshold (int): Minimum number of kfrags required for decryption.
-        shares (int): Total number of kfrags to generate.
+        delegating_sk: Secret key of the delegator (Alice).
+        receiving_pk: Public key of the receiver (Bob).
+        signer: Signer for the delegating party.
+        threshold: Min kfrags required for decryption.
+        shares: Total kfrags to generate.
 
     Returns:
-        List[KeyFrag]: List of generated key fragments (kfrags).
+        List of generated verified key fragments.
     """
-    signer = Signer(delegating_sk)  # Ensure the signer is correctly initialized
+    signer = Signer(delegating_sk)
     kfrags = generate_kfrags(
         delegating_sk=delegating_sk,
         receiving_pk=receiving_pk,
@@ -51,37 +58,50 @@ def create_kfrags(
         sign_delegating_key=True,
         sign_receiving_key=True
     )
+    log.debug(
+        "Generated %d kfrags (threshold=%d)", shares, threshold
+    )
     return kfrags
 
 
-def reencrypt_data(capsule: Capsule, verified_kfrag: VerifiedKeyFrag) -> VerifiedCapsuleFrag:
+def reencrypt_data(
+    capsule: Capsule,
+    verified_kfrag: VerifiedKeyFrag
+) -> VerifiedCapsuleFrag:
     """
-    Reencrypts a capsule using a verified key fragment.
+    Re-encrypts a capsule using a verified key fragment.
 
     Args:
-        capsule (umbral.Capsule): The capsule associated with the ciphertext.
-        verified_kfrag (umbral.VerifiedKeyFrag): The verified key fragment used for reencryption.
+        capsule: The capsule tied to the ciphertext.
+        verified_kfrag: Verified key fragment for
+            re-encryption.
 
     Returns:
-        umbral.VerifiedCapsuleFrag: A fragment of the reencrypted capsule.
+        A verified capsule fragment.
     """
     cfrag = reencrypt(capsule, verified_kfrag)
     return cfrag
 
 
-def decrypt_data(secret_key: SecretKey, capsule: Capsule, ciphertext: bytes) -> bytes:
+def decrypt_data(
+    secret_key: SecretKey,
+    capsule: Capsule,
+    ciphertext: bytes
+) -> bytes:
     """
-    Decrypts data that was encrypted directly with the recipient's public key.
+    Decrypts data encrypted with the owner's public key.
 
     Args:
-        secret_key (SecretKey): The secret key of the receiver to decrypt the data.
-        capsule (Capsule): The capsule associated with the ciphertext.
-        ciphertext (bytes): The encrypted data.
+        secret_key: Owner's secret key.
+        capsule: Capsule associated with the ciphertext.
+        ciphertext: The encrypted data.
 
     Returns:
-        bytes: The decrypted data.
+        Decrypted plaintext bytes.
     """
-    decrypted_data = decrypt_original(secret_key, capsule, ciphertext)
+    decrypted_data = decrypt_original(
+        secret_key, capsule, ciphertext
+    )
     return decrypted_data
 
 
@@ -93,17 +113,18 @@ def decrypt_reencrypted_data(
     ciphertext: bytes
 ) -> bytes:
     """
-    Decrypts the re-encrypted data using the receiving party's secret key.
+    Decrypts re-encrypted data using the receiver's key.
 
     Args:
-        receiving_sk (SecretKey): Secret key of the receiving party.
-        delegating_pk (PublicKey): Public key of the delegating party.
-        capsule (Capsule): Capsule used for decryption.
-        verified_cfrags (List[VerifiedCapsuleFrag]): List of verified re-encrypted capsule fragments.
-        ciphertext (bytes): Ciphertext to be decrypted.
+        receiving_sk: Receiver's secret key.
+        delegating_pk: Delegator's public key.
+        capsule: Capsule used for decryption.
+        verified_cfrags: Verified re-encrypted capsule
+            fragments.
+        ciphertext: Ciphertext to be decrypted.
 
     Returns:
-        bytes: Decrypted data.
+        Decrypted plaintext bytes.
     """
     decrypted_data = decrypt_reencrypted(
         receiving_sk=receiving_sk,
@@ -117,12 +138,12 @@ def decrypt_reencrypted_data(
 
 def deserialize_kfrag(hex_kfrag: str) -> KeyFrag:
     """
-    Deserializes a hexadecimal string back into a Kfrag object.
+    Deserializes a hex string back into a KeyFrag.
 
     Args:
-        hex_kfrag (str): The hexadecimal string representing a Kfrag.
+        hex_kfrag: Hex-encoded key fragment.
 
     Returns:
-        KeyFrag: The deserialized Kfrag object.
+        Deserialized KeyFrag object.
     """
     return KeyFrag.from_bytes(bytes.fromhex(hex_kfrag))
