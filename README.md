@@ -144,6 +144,76 @@ All tuneable parameters are centralized in `src/config.py` and can be overridden
 
 ---
 
+## Security Model & Trust Boundaries
+
+Understanding what the system guarantees — and where those guarantees end — is more important than the code itself.
+
+### Trust Assumptions
+
+| Actor | Trust Level | Assumption |
+|-------|-------------|------------|
+| **Alice (owner)** | Fully trusted | Holds her own secret key; generates kfrags honestly |
+| **Bob (consumer)** | Trusted for his scope | Can decrypt only data explicitly delegated to him |
+| **Relayer (proxy)** | Semi-trusted | Performs re-encryption faithfully, but never sees plaintext — even if compromised |
+| **Network** | Untrusted | All data in transit is assumed observable (this demo has no transport security; production requires TLS/mTLS) |
+
+The core security invariant: **a compromised proxy learns nothing about the plaintext**. The proxy holds ciphertext and kfrags, but kfrags are one-way transformation keys — they cannot be reversed to derive Alice's secret key or the plaintext.
+
+### Threat Model
+
+| Threat | Addressed? | How |
+|--------|------------|-----|
+| **Passive eavesdropping** | Yes | Data is encrypted end-to-end; proxy operates on ciphertext only |
+| **Compromised proxy** | Partially | Proxy cannot decrypt; but a malicious proxy could refuse to re-encrypt (availability, not confidentiality) |
+| **Kfrag substitution** | Yes | Kfrags are signed by Alice; forged or tampered fragments fail verification |
+| **Collusion: proxy + Bob** | Yes | Bob can only decrypt data delegated to him; colluding with the proxy yields nothing beyond his authorized scope |
+| **Collusion: proxy + external** | Yes | Kfrags without Bob's secret key are useless; re-encryption alone doesn't produce decryptable output |
+| **Key compromise (Alice)** | Not addressed | No rotation/revocation mechanism — if Alice's key leaks, all her data is exposed. See roadmap. |
+| **Replay attacks** | Not addressed | No nonce or timestamp validation on re-encryption requests. Relevant when this moves to a networked API. |
+| **Denial of service** | Not addressed | Single-process, no rate limiting. A production proxy needs request throttling. |
+
+**Explicitly out of scope:** side-channel attacks, implementation-level crypto bugs (delegated to PyUmbral / libsodium), physical access threats, and social engineering.
+
+### Design Decisions
+
+These are the architectural choices that shaped the system, along with the alternatives that were considered and why they were rejected:
+
+**Why Proxy Re-Encryption over alternatives?**
+
+| Approach | Considered | Rejected Because |
+|----------|------------|------------------|
+| **Shared symmetric key** | Yes | Requires secure key exchange for every recipient; no delegation without re-sharing |
+| **Attribute-Based Encryption (ABE)** | Yes | More expressive access policies, but significantly higher computational cost and more complex key management; overkill for pairwise delegation |
+| **Multi-Party Computation (MPC)** | Yes | Stronger guarantees for joint computation, but the use case is data sharing, not joint computation — MPC adds latency and protocol complexity without benefit here |
+| **Proxy Re-Encryption (PRE)** | **Selected** | Right fit: Alice encrypts once, delegates per-recipient via kfrags, proxy transforms without access. Clean separation of concerns, good library support |
+
+**Why DID documents for metadata?**
+
+The DID structure gives each data asset a self-describing identity (`did:op:<asset-id>`) that bundles the access URL, encrypted payload, capsule, and kfrags in one document. This is forward-compatible with decentralized identity standards (W3C DID spec) and makes the system extensible — adding verifiable credentials or service endpoints requires no schema changes.
+
+**Why threshold scheme (`t-of-n`) instead of single-kfrag?**
+
+A single kfrag is a single point of failure — whoever holds it controls re-encryption. The threshold scheme distributes trust: you need `t` out of `n` kfrag holders to cooperate. In the current implementation, `n` kfrags go to one proxy (the Relayer), but the architecture is designed so they can be split across independent nodes without code changes.
+
+### Input Validation Strategy
+
+Validation is enforced at system boundaries — where data enters the system from external sources:
+
+- **`store_data()`** — validates all parameters are non-null before any cryptographic operation
+- **`create_did_document()`** — type-checks every field (PublicKey, Capsule, VerifiedKeyFrag) and rejects malformed inputs with specific error messages
+- **`consume_data()`** — verifies asset existence before attempting deserialization; kfrag verification is handled by PyUmbral's `VerifiedKeyFrag` type (forged fragments raise at the library level)
+- **CLI layer** — argparse enforces types (int for threshold/shares) before values reach business logic
+
+Internal module-to-module calls trust their inputs — no redundant validation between `encryption.py` and `database.py`.
+
+### Crypto-Shredding & Compliance
+
+Deleting Alice's secret key renders all data encrypted under her public key permanently unrecoverable — regardless of whether the ciphertext still exists. This is **crypto-shredding**, and it's relevant for GDPR's "right to erasure": instead of hunting down every copy of the data across storage backends, you destroy the key and the data becomes cryptographic noise.
+
+Similarly, revoking all kfrags for a specific Bob effectively cuts off his access without touching the underlying ciphertext — a clean separation between access control and data lifecycle.
+
+---
+
 ## How Proxy Re-Encryption Works
 
 PRE is a public-key cryptosystem that lets a semi-trusted proxy convert a ciphertext encrypted for Alice into one decryptable by Bob — without the proxy ever accessing the plaintext.
